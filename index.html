@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>서울 매장 도팅 지도</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Pretendard", "Noto Sans KR", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      min-height: 100vh;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+
+    aside {
+      border-right: 1px solid #e2e8f0;
+      padding: 20px;
+      background: #ffffff;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    p {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.45;
+      color: #334155;
+    }
+
+    .field {
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #475569;
+    }
+
+    input[type="file"],
+    input[type="text"],
+    button {
+      width: 100%;
+      padding: 9px 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+
+    button {
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      font-weight: 600;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    .secondary {
+      background: #e2e8f0;
+      color: #0f172a;
+    }
+
+    .secondary:hover {
+      background: #cbd5e1;
+    }
+
+    .button-group {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    #status {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 13px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      min-height: 38px;
+      white-space: pre-wrap;
+    }
+
+    #map {
+      width: 100%;
+      height: 100vh;
+    }
+
+    code {
+      background: #f1f5f9;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    @media (max-width: 920px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+
+      aside {
+        border-right: none;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      #map {
+        height: calc(100vh - 380px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>서울시 매장 도팅 지도</h1>
+    <p>
+      CSV를 올리면 매장명을 지도에 점으로 표시합니다.<br />
+      필수 컬럼: <code>name</code>, <code>lat</code>, <code>lng</code>
+    </p>
+
+    <div class="field">
+      <label for="csvFile">CSV 파일 업로드</label>
+      <input id="csvFile" type="file" accept=".csv,text/csv" />
+    </div>
+
+    <div class="field">
+      <label for="searchInput">매장명 검색</label>
+      <input id="searchInput" type="text" placeholder="예: 강남점" />
+    </div>
+
+    <div class="button-group">
+      <button id="loadSample">샘플 데이터 불러오기</button>
+      <button id="searchBtn" class="secondary">검색 위치로 이동</button>
+      <button id="resetBtn" class="secondary">전체 보기</button>
+    </div>
+
+    <div id="status">파일을 선택하거나 샘플 데이터를 불러오세요.</div>
+  </aside>
+
+  <main>
+    <div id="map"></div>
+  </main>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    const SEOUL_CENTER = [37.5665, 126.9780];
+    const SEOUL_ZOOM = 11;
+
+    const sampleStores = [
+      { name: "강남점", lat: 37.4981, lng: 127.0276 },
+      { name: "홍대점", lat: 37.5563, lng: 126.9236 },
+      { name: "잠실점", lat: 37.5133, lng: 127.1002 },
+      { name: "여의도점", lat: 37.5256, lng: 126.9242 },
+      { name: "서울역점", lat: 37.5547, lng: 126.9706 }
+    ];
+
+    const map = L.map("map").setView(SEOUL_CENTER, SEOUL_ZOOM);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    let markerLayer = L.layerGroup().addTo(map);
+    let stores = [];
+
+    const csvInput = document.getElementById("csvFile");
+    const searchInput = document.getElementById("searchInput");
+    const statusBox = document.getElementById("status");
+    const loadSampleBtn = document.getElementById("loadSample");
+    const searchBtn = document.getElementById("searchBtn");
+    const resetBtn = document.getElementById("resetBtn");
+
+    function setStatus(message, type = "info") {
+      const colors = {
+        info: ["#eff6ff", "#1d4ed8"],
+        success: ["#ecfdf5", "#047857"],
+        warning: ["#fff7ed", "#c2410c"],
+        error: ["#fef2f2", "#b91c1c"]
+      };
+      const [bg, fg] = colors[type] || colors.info;
+      statusBox.style.background = bg;
+      statusBox.style.color = fg;
+      statusBox.textContent = message;
+    }
+
+    function clearMarkers() {
+      markerLayer.clearLayers();
+    }
+
+    function drawStores(nextStores) {
+      clearMarkers();
+      stores = nextStores;
+
+      if (!stores.length) {
+        setStatus("표시할 매장 데이터가 없습니다.", "warning");
+        map.setView(SEOUL_CENTER, SEOUL_ZOOM);
+        return;
+      }
+
+      const bounds = [];
+
+      stores.forEach((store) => {
+        const latLng = [store.lat, store.lng];
+        bounds.push(latLng);
+
+        L.circleMarker(latLng, {
+          radius: 7,
+          color: "#2563eb",
+          weight: 2,
+          fillColor: "#3b82f6",
+          fillOpacity: 0.8
+        })
+          .bindPopup(`<b>${store.name}</b><br/>(${store.lat.toFixed(5)}, ${store.lng.toFixed(5)})`)
+          .addTo(markerLayer);
+      });
+
+      map.fitBounds(bounds, { padding: [30, 30] });
+      setStatus(`총 ${stores.length}개 매장을 지도에 표시했습니다.`, "success");
+    }
+
+    function parseCsv(text) {
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (lines.length < 2) {
+        throw new Error("CSV에 헤더와 데이터 행이 필요합니다.");
+      }
+
+      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+      const nameIdx = headers.indexOf("name");
+      const latIdx = headers.indexOf("lat");
+      const lngIdx = headers.indexOf("lng");
+
+      if (nameIdx === -1 || latIdx === -1 || lngIdx === -1) {
+        throw new Error("헤더에 name, lat, lng 컬럼이 있어야 합니다.");
+      }
+
+      const parsed = [];
+
+      lines.slice(1).forEach((line, index) => {
+        const cols = line.split(",").map((c) => c.trim());
+        const name = cols[nameIdx];
+        const lat = Number.parseFloat(cols[latIdx]);
+        const lng = Number.parseFloat(cols[lngIdx]);
+
+        if (!name || Number.isNaN(lat) || Number.isNaN(lng)) {
+          return;
+        }
+
+        parsed.push({ name, lat, lng, row: index + 2 });
+      });
+
+      return parsed;
+    }
+
+    csvInput.addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      try {
+        const text = await file.text();
+        const parsed = parseCsv(text);
+        drawStores(parsed);
+      } catch (error) {
+        setStatus(`파일 처리 실패: ${error.message}`, "error");
+      }
+    });
+
+    loadSampleBtn.addEventListener("click", () => {
+      drawStores(sampleStores);
+    });
+
+    searchBtn.addEventListener("click", () => {
+      const keyword = searchInput.value.trim().toLowerCase();
+      if (!keyword) {
+        setStatus("검색어를 입력하세요.", "warning");
+        return;
+      }
+
+      const target = stores.find((store) => store.name.toLowerCase().includes(keyword));
+      if (!target) {
+        setStatus(`"${searchInput.value}"와 일치하는 매장을 찾지 못했습니다.`, "warning");
+        return;
+      }
+
+      map.setView([target.lat, target.lng], 15);
+      setStatus(`"${target.name}" 위치로 이동했습니다.`, "info");
+    });
+
+    resetBtn.addEventListener("click", () => {
+      if (stores.length) {
+        const bounds = stores.map((store) => [store.lat, store.lng]);
+        map.fitBounds(bounds, { padding: [30, 30] });
+      } else {
+        map.setView(SEOUL_CENTER, SEOUL_ZOOM);
+      }
+      setStatus("지도 범위를 초기화했습니다.", "info");
+    });
+
+    drawStores(sampleStores);
+  </script>
+</body>
+</html>
